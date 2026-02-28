@@ -1,0 +1,41 @@
+project_id = "pqvqlkfyzwxhcnmyghts"
+
+[api]
+port = 55321
+
+[db]
+port = 55322
+
+[studio]
+port = 55323
+
+[inbucket]
+port = 55324
+smtp_port = 55325
+pop3_port = 55326
+
+[analytics]
+enabled = false
+port = 55327
+
+[db.pooler]
+port = 55329
+
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[functions.refine-brief]
+verify_jwt = true
+
+[functions.generate-agenda]
+verify_jwt = true
+
+[functions.ops-advisor]
+verify_jwt = true
+
+[functions.generate-page-help]
+verify_jwt = true

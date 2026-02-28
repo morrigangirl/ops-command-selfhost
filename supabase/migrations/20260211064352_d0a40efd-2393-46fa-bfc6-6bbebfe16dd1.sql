@@ -1,0 +1,1 @@
+ALTER TABLE public.projects ADD COLUMN refined_brief text DEFAULT NULL;

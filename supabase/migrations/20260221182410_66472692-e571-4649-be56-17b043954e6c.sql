@@ -1,0 +1,1 @@
+ALTER TABLE public.metrics ADD COLUMN external_ref text DEFAULT NULL;
