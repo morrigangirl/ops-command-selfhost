@@ -1,5 +1,5 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Shield, LogOut, FolderKanban, TrendingUp, Briefcase, Trash2, Layers, MessageSquare, CalendarDays, Zap } from 'lucide-react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, Users, Shield, LogOut, FolderKanban, TrendingUp, Briefcase, Trash2, Layers, MessageSquare, CalendarDays, Zap, CircleHelp, BookOpenText } from 'lucide-react';
 import { useStore } from '@/lib/store';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
@@ -9,6 +9,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { AdvisorChatPanel, type AdvisorInvocationContext } from '@/components/AdvisorChatPanel';
+import { PageHelpDialog } from '@/components/help/PageHelpDialog';
+import { getFallbackHelpByPath, matchHelpRoute, type PageHelpSections } from '@/help/pageHelp';
 
 function getAdvisorContextFromPath(pathname: string): AdvisorInvocationContext {
   const segments = pathname.split('/').filter(Boolean);
@@ -29,6 +31,7 @@ function getAdvisorContextFromPath(pathname: string): AdvisorInvocationContext {
   if (pathname === '/trash') return { sourcePath: pathname, sourceScreen: 'Trash' };
   if (pathname === '/tokens') return { sourcePath: pathname, sourceScreen: 'Token Usage' };
   if (pathname === '/advisor') return { sourcePath: pathname, sourceScreen: 'Advisor' };
+  if (pathname === '/help-content') return { sourcePath: pathname, sourceScreen: 'Help Content' };
 
   if (segments[0] === 'project' && segments[1]) {
     return {
@@ -76,11 +79,18 @@ export function Layout() {
   const { getDriftAlerts } = useStore();
   const { user, signOut } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const alertCount = getDriftAlerts().length;
   const [showProfile, setShowProfile] = useState(false);
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [advisorContext, setAdvisorContext] = useState<AdvisorInvocationContext | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpLoading, setHelpLoading] = useState(false);
+  const [helpSourceLabel, setHelpSourceLabel] = useState<string>('fallback');
   const [profile, setProfile] = useState<{ display_name: string; avatar_url: string | null } | null>(null);
+  const matchedHelpRoute = useMemo(() => matchHelpRoute(location.pathname), [location.pathname]);
+  const fallbackHelp = useMemo(() => getFallbackHelpByPath(location.pathname), [location.pathname]);
+  const [helpContent, setHelpContent] = useState<PageHelpSections>(fallbackHelp);
   const currentContext = useMemo(
     () => getAdvisorContextFromPath(location.pathname),
     [location.pathname],
@@ -94,6 +104,52 @@ export function Layout() {
     };
     fetch();
   }, [user, showProfile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHelpContent(fallbackHelp);
+    setHelpSourceLabel('fallback');
+
+    if (!user || !matchedHelpRoute) {
+      setHelpLoading(false);
+      return;
+    }
+
+    const loadHelp = async () => {
+      setHelpLoading(true);
+
+      const { data, error } = await supabase
+        .from('page_help_content' as any)
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('route_key', matchedHelpRoute.routeKey)
+        .maybeSingle();
+
+      if (!cancelled) {
+        if (!error && data) {
+          setHelpContent({
+            title: data.title,
+            summary: data.summary,
+            what_this_page_does: data.what_this_page_does,
+            what_is_expected: data.what_is_expected,
+            required_inputs: data.required_inputs,
+            primary_actions: data.primary_actions,
+            common_mistakes: data.common_mistakes,
+            next_steps: data.next_steps,
+          });
+          setHelpSourceLabel(`${data.source} · v${data.version}`);
+        }
+
+        setHelpLoading(false);
+      }
+    };
+
+    loadHelp();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, matchedHelpRoute, fallbackHelp]);
 
   const initials = profile?.display_name ? profile.display_name.slice(0, 2).toUpperCase() : '??';
 
@@ -214,6 +270,16 @@ export function Layout() {
             <Zap size={16} />
             Token Usage
           </NavLink>
+          <NavLink
+            to="/help-content"
+            className={({ isActive }) => cn(
+              'flex items-center gap-3 px-3 py-2.5 rounded text-sm font-medium transition-colors',
+              isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-accent',
+            )}
+          >
+            <BookOpenText size={16} />
+            Help Content
+          </NavLink>
         </nav>
         <div className="p-3 border-t border-border">
           <button
@@ -239,18 +305,29 @@ export function Layout() {
       </main>
       <ProfileDialog open={showProfile} onClose={() => setShowProfile(false)} />
 
-      <button
-        type="button"
-        className="fixed bottom-6 right-6 z-40 h-16 w-16 rounded-full bg-gradient-to-br from-cyan-400 to-blue-600 text-white shadow-[0_10px_30px_rgba(56,189,248,0.4)] transition-transform hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-primary/40"
-        aria-label="Open AI advisor"
-        title="Open AI advisor"
-        onClick={() => {
-          setAdvisorContext(currentContext);
-          setAdvisorOpen(true);
-        }}
-      >
-        <MessageSquare size={18} className="mx-auto" />
-      </button>
+      <div className="fixed bottom-6 right-6 z-40 flex flex-col gap-3">
+        <button
+          type="button"
+          className="h-14 w-14 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-600 text-white shadow-[0_10px_28px_rgba(16,185,129,0.35)] transition-transform hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-primary/40"
+          aria-label="Open page help"
+          title="Open page help"
+          onClick={() => setHelpOpen(true)}
+        >
+          <CircleHelp size={18} className="mx-auto" />
+        </button>
+        <button
+          type="button"
+          className="h-16 w-16 rounded-full bg-gradient-to-br from-cyan-400 to-blue-600 text-white shadow-[0_10px_30px_rgba(56,189,248,0.4)] transition-transform hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-primary/40"
+          aria-label="Open AI advisor"
+          title="Open AI advisor"
+          onClick={() => {
+            setAdvisorContext(currentContext);
+            setAdvisorOpen(true);
+          }}
+        >
+          <MessageSquare size={18} className="mx-auto" />
+        </button>
+      </div>
 
       <Dialog open={advisorOpen} onOpenChange={setAdvisorOpen}>
         <DialogContent className="w-[min(96vw,1200px)] max-w-none h-[min(90vh,820px)] p-0 overflow-hidden">
@@ -267,6 +344,23 @@ export function Layout() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <PageHelpDialog
+        open={helpOpen}
+        onOpenChange={setHelpOpen}
+        routeLabel={matchedHelpRoute?.routeTitle || currentContext.sourceScreen || 'Current Screen'}
+        loading={helpLoading}
+        content={helpContent}
+        sourceLabel={helpSourceLabel}
+        onEdit={() => {
+          setHelpOpen(false);
+          if (matchedHelpRoute?.routeKey) {
+            navigate(`/help-content?route=${encodeURIComponent(matchedHelpRoute.routeKey)}`);
+            return;
+          }
+          navigate('/help-content');
+        }}
+      />
     </div>
   );
 }

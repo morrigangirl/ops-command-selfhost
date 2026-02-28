@@ -25,6 +25,7 @@ import WorkstreamsView from "@/pages/WorkstreamsView";
 import AdvisorChat from "@/pages/AdvisorChat";
 import TokenUsage from "@/pages/TokenUsage";
 import CalendarView from "@/pages/CalendarView";
+import HelpContentManager from "@/pages/HelpContentManager";
 import NotFound from "@/pages/NotFound";
 import { MFAChallenge } from "@/components/MFAChallenge";
 import { MFAEnrollGate } from "@/components/MFAEnrollGate";
@@ -111,6 +112,7 @@ function ProtectedRoutes() {
                 <Route path="/calendar" element={<CalendarView />} />
                 <Route path="/trash" element={<TrashView />} />
                 <Route path="/tokens" element={<TokenUsage />} />
+                <Route path="/help-content" element={<HelpContentManager />} />
               </Route>
               <Route path="*" element={<NotFound />} />
             </Routes>
