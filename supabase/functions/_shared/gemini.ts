@@ -31,6 +31,8 @@ interface GeminiGenerateResult {
   model: string;
 }
 
+const DEFAULT_TIMEOUT_MS = 15000;
+
 function getGeminiConfig() {
   const apiKey = Deno.env.get("GEMINI_API_KEY");
   if (!apiKey) {
@@ -69,7 +71,7 @@ export async function generateGeminiText(
 ): Promise<GeminiGenerateResult> {
   const { apiKey, model } = getGeminiConfig();
   const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   const body: any = {
     contents: params.messages.map((message) => ({
@@ -87,11 +89,29 @@ export async function generateGeminiText(
     };
   }
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeoutMs = Number(Deno.env.get("GEMINI_TIMEOUT_MS") ?? DEFAULT_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new GeminiError("Gemini request timed out", 504);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const details = await response.text();

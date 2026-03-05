@@ -11,6 +11,7 @@ import { format, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { ActionItemRow } from './ActionItemRow';
 import { toast } from '@/hooks/use-toast';
+import { NotesPanel } from '@/components/NotesPanel';
 
 interface MeetingCardProps {
   meeting: Meeting;
@@ -155,6 +156,10 @@ export function MeetingCard({ meeting }: MeetingCardProps) {
               </Button>
             </div>
           )}
+
+          <div className="pt-2 border-t border-border">
+            <NotesPanel targetType="meeting" targetId={meeting.id} title="Meeting Notes" />
+          </div>
         </div>
       )}
     </div>

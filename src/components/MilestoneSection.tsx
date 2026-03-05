@@ -9,6 +9,7 @@ import { WorkItemTree } from './WorkItemTree';
 import { ChevronRight, Plus, Trash2, Target } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
+import { NotesPanel } from '@/components/NotesPanel';
 
 interface MilestoneSectionProps {
   projectId: string;
@@ -95,6 +96,9 @@ function MilestoneItem({ milestone, projectId, onToggle, onDelete }: {
         <CollapsibleContent>
           <div className="px-3 py-2 bg-background border-t border-border">
             <WorkItemTree projectId={projectId} milestoneId={milestone.id} />
+            <div className="mt-3">
+              <NotesPanel targetType="milestone" targetId={milestone.id} title="Milestone Notes" />
+            </div>
           </div>
         </CollapsibleContent>
       </div>

@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { ArrowLeft, Plus, User, ChevronRight, Calendar, UserMinus } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { MEETING_TYPE_LABELS, MeetingType } from '@/lib/types';
+import { NotesPanel } from '@/components/NotesPanel';
 
 export default function PersonDetail() {
   const { id } = useParams<{ id: string }>();
@@ -162,6 +163,10 @@ export default function PersonDetail() {
           )}
         </TabsContent>
       </Tabs>
+
+      <div className="mt-6">
+        <NotesPanel targetType="person" targetId={person.id} />
+      </div>
 
       <PersonForm open={showEditForm} onClose={() => setShowEditForm(false)} person={person} />
       <MeetingForm open={showMeetingForm} onClose={() => setShowMeetingForm(false)} personId={person.id} />

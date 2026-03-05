@@ -85,6 +85,20 @@ This scaffold uses token-based tunnel startup:
 
 If you prefer config-file mode, use `cloudflared/config.example.yml` as a starter.
 
+## MFA Support Policy
+
+- MFA is mandatory and enforced server-side.
+- Self-service MFA disable is intentionally not available in the app.
+- If a user loses access to their authenticator, recovery/reset must be handled through admin support.
+
+## Integrity Checks
+
+- Pre-migration tenant-integrity report SQL: `infra/selfhost/scripts/cross_tenant_integrity_report.sql`
+- Optional quarantine+cleanup SQL: `infra/selfhost/scripts/cross_tenant_integrity_remediate.sql`
+- Wrapper script (local Supabase): `infra/selfhost/scripts/run_integrity_checks.sh`
+  - Report only: `infra/selfhost/scripts/run_integrity_checks.sh`
+  - Remediate + report: `infra/selfhost/scripts/run_integrity_checks.sh --remediate`
+
 ## Repo Integration Tasks You Should Do Next
 
 1. Update CORS allowlists in:

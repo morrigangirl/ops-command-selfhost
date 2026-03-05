@@ -11,6 +11,7 @@ import { MetricStatusBadge } from '@/components/MetricStatusBadge';
 import { MetricSparkline } from '@/components/MetricSparkline';
 import { MetricForm } from '@/components/MetricForm';
 import ReactMarkdown from 'react-markdown';
+import { NotesPanel } from '@/components/NotesPanel';
 
 export default function MetricDetail() {
   const { id } = useParams<{ id: string }>();
@@ -227,6 +228,8 @@ export default function MetricDetail() {
           </div>
         )}
       </div>
+
+      <NotesPanel targetType="metric" targetId={metric.id} />
 
       <MetricForm open={editing} onClose={() => setEditing(false)} metric={metric} />
     </div>

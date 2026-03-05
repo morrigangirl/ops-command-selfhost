@@ -238,3 +238,38 @@ export interface EscalationFlag {
   occurrences: number;
   meetingIds: string[];
 }
+
+export const NOTE_TARGET_TYPES = [
+  'project',
+  'program',
+  'workstream',
+  'person',
+  'metric',
+  'meeting',
+  'milestone',
+  'work_item',
+] as const;
+
+export type NoteTargetType = (typeof NOTE_TARGET_TYPES)[number];
+
+export const NOTE_TARGET_LABELS: Record<NoteTargetType, string> = {
+  project: 'Project',
+  program: 'Program',
+  workstream: 'Workstream',
+  person: 'Person',
+  metric: 'Metric',
+  meeting: 'Meeting',
+  milestone: 'Milestone',
+  work_item: 'Work Item',
+};
+
+export interface Note {
+  id: string;
+  title: string;
+  body: string;
+  targetType: NoteTargetType | null;
+  targetId: string | null;
+  isPinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}

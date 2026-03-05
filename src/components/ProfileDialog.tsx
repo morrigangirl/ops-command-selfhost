@@ -8,8 +8,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useState, useEffect, useRef } from 'react';
 import { toast } from '@/hooks/use-toast';
-import { Camera, ShieldOff } from 'lucide-react';
-import { MFAEnroll, MFAUnenroll } from '@/components/MFAEnroll';
+import { Camera, ShieldCheck, ShieldOff } from 'lucide-react';
+import { MFAEnroll } from '@/components/MFAEnroll';
 
 interface ProfileDialogProps {
   open: boolean;
@@ -136,7 +136,15 @@ export function ProfileDialog({ open, onClose }: ProfileDialogProps) {
                 onCancelled={() => setShowEnroll(false)}
               />
             ) : mfaEnabled ? (
-              <MFAUnenroll onUnenrolled={() => setMfaEnabled(false)} />
+              <div className="flex items-center justify-between p-3 border border-border rounded-lg">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={14} className="text-primary" />
+                  <span className="text-xs font-mono">MFA ENABLED</span>
+                </div>
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  Managed by admin support
+                </span>
+              </div>
             ) : (
               <div className="flex items-center justify-between p-3 border border-border rounded-lg">
                 <div className="flex items-center gap-2">

@@ -13,6 +13,7 @@ interface PersonFormProps {
   open: boolean;
   onClose: () => void;
   person?: Person;
+  defaultManagerId?: string | null;
 }
 
 const defaultForm = {
@@ -28,7 +29,7 @@ const defaultForm = {
   defaultCheckinCadenceDays: 14,
 };
 
-export function PersonForm({ open, onClose, person }: PersonFormProps) {
+export function PersonForm({ open, onClose, person, defaultManagerId = null }: PersonFormProps) {
   const { people, addPerson, updatePerson } = useStore();
   const [form, setForm] = useState(defaultForm);
 
@@ -47,9 +48,12 @@ export function PersonForm({ open, onClose, person }: PersonFormProps) {
         defaultCheckinCadenceDays: person.defaultCheckinCadenceDays,
       });
     } else {
-      setForm(defaultForm);
+      setForm({
+        ...defaultForm,
+        managerId: defaultManagerId,
+      });
     }
-  }, [person, open]);
+  }, [person, open, defaultManagerId]);
 
   const handleSubmit = () => {
     if (!form.name) return;

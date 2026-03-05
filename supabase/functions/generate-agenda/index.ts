@@ -1,14 +1,20 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getCorsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders, getResponseHeaders, isOriginAllowed } from "../_shared/cors.ts";
 import { GeminiError, generateGeminiText } from "../_shared/gemini.ts";
 
 const MAX_FIELD_LENGTH = 2000;
 const MAX_ARRAY_ITEMS = 50;
+const MAX_REQUEST_BYTES = 80_000;
+const DAILY_TOKEN_LIMIT = 160_000;
 
 function truncate(val: unknown, max = MAX_FIELD_LENGTH): string {
   const s = typeof val === "string" ? val : String(val ?? "");
   return s.slice(0, max);
+}
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
 }
 
 const SYSTEM_PROMPTS: Record<string, string> = {
@@ -22,6 +28,13 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
+  if (!isOriginAllowed(req)) {
+    return new Response(JSON.stringify({ error: "Origin not allowed" }), {
+      status: 403,
+      headers: getResponseHeaders(req, "application/json"),
+    });
+  }
+
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -31,7 +44,7 @@ serve(async (req) => {
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: getResponseHeaders(req, "application/json"),
       });
     }
 
@@ -52,14 +65,14 @@ serve(async (req) => {
     ) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: getResponseHeaders(req, "application/json"),
       });
     }
 
     if (claimsData.claims.aal !== "aal2") {
       return new Response(JSON.stringify({ error: "MFA required" }), {
         status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: getResponseHeaders(req, "application/json"),
       });
     }
 
@@ -79,7 +92,15 @@ serve(async (req) => {
     if (allowed === false) {
       return new Response(
         JSON.stringify({ error: "Rate limit exceeded. Please try again later." }),
-        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        { status: 429, headers: getResponseHeaders(req, "application/json") },
+      );
+    }
+
+    const contentLength = Number(req.headers.get("content-length") ?? "0");
+    if (contentLength > MAX_REQUEST_BYTES) {
+      return new Response(
+        JSON.stringify({ error: "Request payload too large" }),
+        { status: 413, headers: getResponseHeaders(req, "application/json") },
       );
     }
 
@@ -104,6 +125,20 @@ ${openActionItems.length > 0 ? `Open action items:\n${openActionItems.map((i: st
 
 ${activeProjects.length > 0 ? `Active projects:\n${activeProjects.map((p: string) => `- ${p}`).join("\n")}` : "No active projects."}`;
 
+    const estimatedPromptTokens = estimateTokens(`${systemPrompt}\n${userPrompt}`);
+    const { data: withinDailyQuota } = await serviceClient.rpc("check_daily_token_quota", {
+      p_user_id: userId,
+      p_function_name: "generate-agenda",
+      p_max_tokens: DAILY_TOKEN_LIMIT,
+      p_requested_tokens: estimatedPromptTokens,
+    });
+    if (withinDailyQuota === false) {
+      return new Response(
+        JSON.stringify({ error: "Daily token quota exceeded. Please try again tomorrow." }),
+        { status: 429, headers: getResponseHeaders(req, "application/json") },
+      );
+    }
+
     const ai = await generateGeminiText({
       systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
@@ -124,27 +159,27 @@ ${activeProjects.length > 0 ? `Active projects:\n${activeProjects.map((p: string
     }
 
     return new Response(JSON.stringify({ agenda: ai.text }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: getResponseHeaders(req, "application/json"),
     });
   } catch (e) {
     if (e instanceof GeminiError) {
       if (e.status === 429) {
         return new Response(
           JSON.stringify({ error: "Rate limited. Please try again shortly." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          { status: 429, headers: getResponseHeaders(req, "application/json") },
         );
       }
 
       return new Response(
         JSON.stringify({ error: "Failed to generate agenda" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        { status: 500, headers: getResponseHeaders(req, "application/json") },
       );
     }
 
     console.error("generate-agenda error:", e);
     return new Response(JSON.stringify({ error: "Internal error" }), {
       status: 500,
-      headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
+      headers: getResponseHeaders(req, "application/json"),
     });
   }
 });

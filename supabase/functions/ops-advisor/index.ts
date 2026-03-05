@@ -1,12 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getCorsHeaders } from "../_shared/cors.ts";
+import { getCorsHeaders, getResponseHeaders, isOriginAllowed } from "../_shared/cors.ts";
 import { GeminiError, type LlmMessage, generateGeminiText } from "../_shared/gemini.ts";
 
-const MAX_MESSAGE_CONTENT = 10000;
-const MAX_MESSAGES = 50;
-const SENSITIVE_FIELD_PATTERN =
-  /(password|secret|api[_-]?key|private[_-]?key|access[_-]?token|refresh[_-]?token|credential|device_fingerprint)/i;
+const MAX_MESSAGE_CONTENT = 4000;
+const MAX_MESSAGES = 20;
+const MAX_REQUEST_BYTES = 120_000;
+const MAX_PROMPT_CHARS = 120_000;
+const DEFAULT_ROW_LIMIT = 25;
+const FOCUSED_ROW_LIMIT = 80;
+const DAILY_TOKEN_LIMIT = 400_000;
+const ESTIMATED_COMPLETION_TOKENS = 1500;
 
 interface AdvisorInvocationContext {
   sourcePath?: string;
@@ -17,11 +21,32 @@ interface AdvisorInvocationContext {
 
 type RowRecord = Record<string, unknown>;
 
+type TableData = {
+  profiles: RowRecord[] | null;
+  people: RowRecord[] | null;
+  programs: RowRecord[] | null;
+  workstreams: RowRecord[] | null;
+  projects: RowRecord[] | null;
+  milestones: RowRecord[] | null;
+  workItems: RowRecord[] | null;
+  metrics: RowRecord[] | null;
+  metricEntries: RowRecord[] | null;
+  metricTargets: RowRecord[] | null;
+  meetings: RowRecord[] | null;
+  actionItems: RowRecord[] | null;
+  meetingDecisions: RowRecord[] | null;
+  reviewEntries: RowRecord[] | null;
+};
+
 function toRows(rows: unknown[] | null): RowRecord[] {
   return (rows ?? []).filter((row): row is RowRecord => !!row && typeof row === "object");
 }
 
-function splitTextIntoChunks(text: string, targetSize = 180): string[] {
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function splitTextIntoChunks(text: string, targetSize = 220): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
 
@@ -56,29 +81,12 @@ function toSseChunk(model: string, content: string) {
   });
 }
 
-function sanitizeValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sanitizeValue);
-  }
-
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (SENSITIVE_FIELD_PATTERN.test(key)) continue;
-      out[key] = sanitizeValue(nested);
-    }
-    return out;
-  }
-
-  return value;
-}
-
-function buildSection(title: string, rows: unknown[] | null) {
-  const safeRows = (sanitizeValue(rows ?? []) as unknown[]) ?? [];
+function buildSection(title: string, rows: unknown[] | null, maxRows = DEFAULT_ROW_LIMIT) {
+  const safeRows = toRows(rows).slice(0, maxRows);
   const count = safeRows.length;
   if (count === 0) return `=== ${title} (0) ===\nNone.`;
 
-  const serializedRows = safeRows.map((row) => JSON.stringify(row)).join("\n");
+  const serializedRows = safeRows.map((row) => JSON.stringify(row).slice(0, 1200)).join("\n");
   return `=== ${title} (${count}) ===\n${serializedRows}`;
 }
 
@@ -122,9 +130,21 @@ function normalizeMessage(raw: unknown): LlmMessage {
   return { role, content };
 }
 
+function mergeRows(base: unknown[] | null, focused: unknown[] | null): RowRecord[] {
+  const merged = [...toRows(base), ...toRows(focused)];
+  const out = new Map<string, RowRecord>();
+
+  for (const row of merged) {
+    const key = row.id ? String(row.id) : JSON.stringify(row);
+    out.set(key, row);
+  }
+
+  return [...out.values()];
+}
+
 function buildFocusedContextSection(
   context: AdvisorInvocationContext | null,
-  tables: Record<string, unknown[] | null>,
+  tables: TableData,
 ) {
   if (!context?.sourceEntityId || !context.sourceEntityType) {
     return "=== FOCUSED ENTITY CONTEXT ===\nNone.";
@@ -138,63 +158,30 @@ function buildFocusedContextSection(
 
   if (type === "project") {
     return [
-      buildSection("FOCUS PROJECT", byId(tables.projects)),
-      buildSection(
-        "FOCUS PROJECT MILESTONES",
-        byField(tables.milestones, "project_id"),
-      ),
-      buildSection(
-        "FOCUS PROJECT WORK ITEMS",
-        byField(tables.workItems, "project_id"),
-      ),
-      buildSection(
-        "FOCUS PROJECT REVIEWS",
-        byField(tables.reviewEntries, "project_id"),
-      ),
-      buildSection(
-        "FOCUS PROJECT METRICS",
-        byField(tables.metrics, "related_project_id"),
-      ),
-      buildSection(
-        "FOCUS PROJECT ACTION ITEMS",
-        byField(tables.actionItems, "project_id"),
-      ),
+      buildSection("FOCUS PROJECT", byId(tables.projects), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PROJECT MILESTONES", byField(tables.milestones, "project_id"), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PROJECT WORK ITEMS", byField(tables.workItems, "project_id"), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PROJECT REVIEWS", byField(tables.reviewEntries, "project_id"), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PROJECT METRICS", byField(tables.metrics, "related_project_id"), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PROJECT ACTION ITEMS", byField(tables.actionItems, "project_id"), FOCUSED_ROW_LIMIT),
     ].join("\n\n");
   }
 
   if (type === "person") {
     return [
-      buildSection("FOCUS PERSON", byId(tables.people)),
-      buildSection(
-        "FOCUS PERSON OWNED ACTION ITEMS",
-        byField(tables.actionItems, "owner_id"),
-      ),
-      buildSection(
-        "FOCUS PERSON MEETINGS",
-        byField(tables.meetings, "person_id"),
-      ),
-      buildSection(
-        "FOCUS PERSON PROJECTS",
-        byField(tables.projects, "owner_id"),
-      ),
-      buildSection(
-        "FOCUS PERSON METRICS",
-        byField(tables.metrics, "owner_id"),
-      ),
+      buildSection("FOCUS PERSON", byId(tables.people), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PERSON OWNED ACTION ITEMS", byField(tables.actionItems, "owner_id"), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PERSON MEETINGS", byField(tables.meetings, "person_id"), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PERSON PROJECTS", byField(tables.projects, "owner_id"), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PERSON METRICS", byField(tables.metrics, "owner_id"), FOCUSED_ROW_LIMIT),
     ].join("\n\n");
   }
 
   if (type === "metric") {
     return [
-      buildSection("FOCUS METRIC", byId(tables.metrics)),
-      buildSection(
-        "FOCUS METRIC ENTRIES",
-        byField(tables.metricEntries, "metric_id"),
-      ),
-      buildSection(
-        "FOCUS METRIC TARGETS",
-        byField(tables.metricTargets, "metric_id"),
-      ),
+      buildSection("FOCUS METRIC", byId(tables.metrics), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS METRIC ENTRIES", byField(tables.metricEntries, "metric_id"), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS METRIC TARGETS", byField(tables.metricTargets, "metric_id"), FOCUSED_ROW_LIMIT),
     ].join("\n\n");
   }
 
@@ -203,11 +190,12 @@ function buildFocusedContextSection(
     const workstreamIds = new Set(programWorkstreams.map((row) => row.id).filter(Boolean));
 
     return [
-      buildSection("FOCUS PROGRAM", byId(tables.programs)),
-      buildSection("FOCUS PROGRAM WORKSTREAMS", programWorkstreams),
+      buildSection("FOCUS PROGRAM", byId(tables.programs), FOCUSED_ROW_LIMIT),
+      buildSection("FOCUS PROGRAM WORKSTREAMS", programWorkstreams, FOCUSED_ROW_LIMIT),
       buildSection(
         "FOCUS PROGRAM PROJECTS",
         toRows(tables.projects).filter((row) => workstreamIds.has(row.workstream_id)),
+        FOCUSED_ROW_LIMIT,
       ),
     ].join("\n\n");
   }
@@ -215,8 +203,199 @@ function buildFocusedContextSection(
   return "=== FOCUSED ENTITY CONTEXT ===\nNo focused entity mapping for this type.";
 }
 
+function buildPromptWithinBudget(parts: string[], maxChars: number): string {
+  let result = "";
+  for (const part of parts) {
+    const addition = result ? `\n\n${part}` : part;
+    const remaining = maxChars - result.length;
+    if (remaining <= 0) break;
+
+    if (addition.length <= remaining) {
+      result += addition;
+      continue;
+    }
+
+    result += `${addition.slice(0, Math.max(remaining - 16, 0))}\n...[truncated]`;
+    break;
+  }
+
+  return result;
+}
+
+async function fetchRecentTables(supabase: ReturnType<typeof createClient>): Promise<TableData> {
+  const [
+    { data: profiles },
+    { data: people },
+    { data: programs },
+    { data: workstreams },
+    { data: projects },
+    { data: milestones },
+    { data: workItems },
+    { data: metrics },
+    { data: metricEntries },
+    { data: metricTargets },
+    { data: meetings },
+    { data: actionItems },
+    { data: meetingDecisions },
+    { data: reviewEntries },
+  ] = await Promise.all([
+    supabase.from("profiles").select("id, display_name, created_at, updated_at").order("updated_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("people").select("id, name, role, active, manager_id, last_1on1, last_strategic_deep_dive, last_human_checkin, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("programs").select("id, name, status, start_date, target_end_date, created_at, deleted_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("workstreams").select("id, program_id, name, description, sort_order, lead_id, created_at, deleted_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("projects").select("id, name, status, risk, review_cadence, owner_id, workstream_id, target_date, last_reviewed, created_date, created_at, deleted_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("milestones").select("id, project_id, name, target_date, completed, completed_date, sort_order, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("work_items").select("id, project_id, milestone_id, parent_id, type, title, status, assignee_id, due_date, sort_order, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("metrics").select("id, name, category, unit, current_value, confidence, status, owner_id, related_project_id, last_updated_at, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("metric_entries").select("id, metric_id, entry_date, value, confidence_override, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("metric_targets").select("id, metric_id, period, target_value, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("meetings").select("id, person_id, type, scheduled_date, status, completed_at, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("meeting_action_items").select("id, meeting_id, title, owner_id, due_date, project_id, status, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("meeting_decisions").select("id, meeting_id, summary, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+    supabase.from("review_entries").select("id, project_id, date, notes, created_at").order("created_at", { ascending: false }).limit(DEFAULT_ROW_LIMIT),
+  ]);
+
+  return {
+    profiles: profiles as RowRecord[] | null,
+    people: people as RowRecord[] | null,
+    programs: programs as RowRecord[] | null,
+    workstreams: workstreams as RowRecord[] | null,
+    projects: projects as RowRecord[] | null,
+    milestones: milestones as RowRecord[] | null,
+    workItems: workItems as RowRecord[] | null,
+    metrics: metrics as RowRecord[] | null,
+    metricEntries: metricEntries as RowRecord[] | null,
+    metricTargets: metricTargets as RowRecord[] | null,
+    meetings: meetings as RowRecord[] | null,
+    actionItems: actionItems as RowRecord[] | null,
+    meetingDecisions: meetingDecisions as RowRecord[] | null,
+    reviewEntries: reviewEntries as RowRecord[] | null,
+  };
+}
+
+async function fetchFocusedTables(
+  supabase: ReturnType<typeof createClient>,
+  context: AdvisorInvocationContext | null,
+): Promise<Partial<TableData>> {
+  if (!context?.sourceEntityId || !context.sourceEntityType) return {};
+
+  const id = context.sourceEntityId;
+  const type = context.sourceEntityType.toLowerCase();
+
+  if (type === "project") {
+    const [
+      { data: projectRows },
+      { data: milestones },
+      { data: workItems },
+      { data: reviewEntries },
+      { data: metrics },
+      { data: actionItems },
+    ] = await Promise.all([
+      supabase.from("projects").select("id, name, status, risk, review_cadence, owner_id, workstream_id, target_date, last_reviewed, created_date, created_at, deleted_at").eq("id", id).limit(1),
+      supabase.from("milestones").select("id, project_id, name, target_date, completed, completed_date, sort_order, created_at").eq("project_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+      supabase.from("work_items").select("id, project_id, milestone_id, parent_id, type, title, status, assignee_id, due_date, sort_order, created_at").eq("project_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+      supabase.from("review_entries").select("id, project_id, date, notes, created_at").eq("project_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+      supabase.from("metrics").select("id, name, category, unit, current_value, confidence, status, owner_id, related_project_id, last_updated_at, created_at").eq("related_project_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+      supabase.from("meeting_action_items").select("id, meeting_id, title, owner_id, due_date, project_id, status, created_at").eq("project_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+    ]);
+
+    return {
+      projects: projectRows as RowRecord[] | null,
+      milestones: milestones as RowRecord[] | null,
+      workItems: workItems as RowRecord[] | null,
+      reviewEntries: reviewEntries as RowRecord[] | null,
+      metrics: metrics as RowRecord[] | null,
+      actionItems: actionItems as RowRecord[] | null,
+    };
+  }
+
+  if (type === "person") {
+    const [
+      { data: personRows },
+      { data: meetings },
+      { data: actionItems },
+      { data: projects },
+      { data: metrics },
+    ] = await Promise.all([
+      supabase.from("people").select("id, name, role, active, manager_id, last_1on1, last_strategic_deep_dive, last_human_checkin, created_at").eq("id", id).limit(1),
+      supabase.from("meetings").select("id, person_id, type, scheduled_date, status, completed_at, created_at").eq("person_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+      supabase.from("meeting_action_items").select("id, meeting_id, title, owner_id, due_date, project_id, status, created_at").eq("owner_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+      supabase.from("projects").select("id, name, status, risk, review_cadence, owner_id, workstream_id, target_date, last_reviewed, created_date, created_at, deleted_at").eq("owner_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+      supabase.from("metrics").select("id, name, category, unit, current_value, confidence, status, owner_id, related_project_id, last_updated_at, created_at").eq("owner_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+    ]);
+
+    return {
+      people: personRows as RowRecord[] | null,
+      meetings: meetings as RowRecord[] | null,
+      actionItems: actionItems as RowRecord[] | null,
+      projects: projects as RowRecord[] | null,
+      metrics: metrics as RowRecord[] | null,
+    };
+  }
+
+  if (type === "metric") {
+    const [
+      { data: metricRows },
+      { data: metricEntries },
+      { data: metricTargets },
+    ] = await Promise.all([
+      supabase.from("metrics").select("id, name, category, unit, current_value, confidence, status, owner_id, related_project_id, last_updated_at, created_at").eq("id", id).limit(1),
+      supabase.from("metric_entries").select("id, metric_id, entry_date, value, confidence_override, created_at").eq("metric_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+      supabase.from("metric_targets").select("id, metric_id, period, target_value, created_at").eq("metric_id", id).order("created_at", { ascending: false }).limit(FOCUSED_ROW_LIMIT),
+    ]);
+
+    return {
+      metrics: metricRows as RowRecord[] | null,
+      metricEntries: metricEntries as RowRecord[] | null,
+      metricTargets: metricTargets as RowRecord[] | null,
+    };
+  }
+
+  if (type === "program") {
+    const { data: programRows } = await supabase
+      .from("programs")
+      .select("id, name, status, start_date, target_end_date, created_at, deleted_at")
+      .eq("id", id)
+      .limit(1);
+
+    const { data: workstreamRows } = await supabase
+      .from("workstreams")
+      .select("id, program_id, name, description, sort_order, lead_id, created_at, deleted_at")
+      .eq("program_id", id)
+      .order("created_at", { ascending: false })
+      .limit(FOCUSED_ROW_LIMIT);
+
+    const workstreamIds = [...new Set(toRows(workstreamRows).map((row) => row.id).filter(Boolean))] as string[];
+    let projectRows: RowRecord[] | null = [];
+    if (workstreamIds.length > 0) {
+      const { data } = await supabase
+        .from("projects")
+        .select("id, name, status, risk, review_cadence, owner_id, workstream_id, target_date, last_reviewed, created_date, created_at, deleted_at")
+        .in("workstream_id", workstreamIds)
+        .order("created_at", { ascending: false })
+        .limit(FOCUSED_ROW_LIMIT);
+      projectRows = data as RowRecord[] | null;
+    }
+
+    return {
+      programs: programRows as RowRecord[] | null,
+      workstreams: workstreamRows as RowRecord[] | null,
+      projects: projectRows as RowRecord[] | null,
+    };
+  }
+
+  return {};
+}
+
 serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
+
+  if (!isOriginAllowed(req)) {
+    return new Response(JSON.stringify({ error: "Origin not allowed" }), {
+      status: 403,
+      headers: getResponseHeaders(req, "application/json"),
+    });
+  }
 
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -227,7 +406,15 @@ serve(async (req) => {
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(JSON.stringify({ error: "Missing auth" }), {
         status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: getResponseHeaders(req, "application/json"),
+      });
+    }
+
+    const contentLength = Number(req.headers.get("content-length") ?? "0");
+    if (contentLength > MAX_REQUEST_BYTES) {
+      return new Response(JSON.stringify({ error: "Request payload too large" }), {
+        status: 413,
+        headers: getResponseHeaders(req, "application/json"),
       });
     }
 
@@ -247,14 +434,14 @@ serve(async (req) => {
     ) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: getResponseHeaders(req, "application/json"),
       });
     }
 
     if (claimsData.claims.aal !== "aal2") {
       return new Response(JSON.stringify({ error: "MFA required" }), {
         status: 403,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: getResponseHeaders(req, "application/json"),
       });
     }
 
@@ -276,109 +463,94 @@ serve(async (req) => {
         JSON.stringify({ error: "Rate limit exceeded. Please try again later." }),
         {
           status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          headers: getResponseHeaders(req, "application/json"),
         },
       );
     }
 
     const body = await req.json();
+    const serializedBodySize = JSON.stringify(body).length;
+    if (serializedBodySize > MAX_REQUEST_BYTES) {
+      return new Response(JSON.stringify({ error: "Request payload too large" }), {
+        status: 413,
+        headers: getResponseHeaders(req, "application/json"),
+      });
+    }
+
     if (!Array.isArray(body.messages)) {
       return new Response(JSON.stringify({ error: "Invalid messages" }), {
         status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: getResponseHeaders(req, "application/json"),
       });
     }
 
     const context = parseInvocationContext(body.context);
     const messages = body.messages.slice(0, MAX_MESSAGES).map((m: unknown) => normalizeMessage(m));
 
-    const [
-      { data: profiles },
-      { data: people },
-      { data: programs },
-      { data: workstreams },
-      { data: projects },
-      { data: milestones },
-      { data: workItems },
-      { data: metrics },
-      { data: metricEntries },
-      { data: metricTargets },
-      { data: meetings },
-      { data: actionItems },
-      { data: meetingDecisions },
-      { data: reviewEntries },
-    ] = await Promise.all([
-      supabase.from("profiles").select("id, user_id, display_name, avatar_url, created_at, updated_at"),
-      supabase.from("people").select("*"),
-      supabase.from("programs").select("*"),
-      supabase.from("workstreams").select("*"),
-      supabase.from("projects").select("*"),
-      supabase.from("milestones").select("*"),
-      supabase.from("work_items").select("*"),
-      supabase.from("metrics").select("*"),
-      supabase.from("metric_entries").select("*"),
-      supabase.from("metric_targets").select("*"),
-      supabase.from("meetings").select("*"),
-      supabase.from("meeting_action_items").select("*"),
-      supabase.from("meeting_decisions").select("*"),
-      supabase.from("review_entries").select("*"),
-    ]);
+    const baseTables = await fetchRecentTables(supabase);
+    const focusedTables = await fetchFocusedTables(supabase, context);
 
-    const tables = {
-      profiles,
-      people,
-      programs,
-      workstreams,
-      projects,
-      milestones,
-      workItems,
-      metrics,
-      metricEntries,
-      metricTargets,
-      meetings,
-      actionItems,
-      meetingDecisions,
-      reviewEntries,
+    const tables: TableData = {
+      profiles: mergeRows(baseTables.profiles, focusedTables.profiles ?? null),
+      people: mergeRows(baseTables.people, focusedTables.people ?? null),
+      programs: mergeRows(baseTables.programs, focusedTables.programs ?? null),
+      workstreams: mergeRows(baseTables.workstreams, focusedTables.workstreams ?? null),
+      projects: mergeRows(baseTables.projects, focusedTables.projects ?? null),
+      milestones: mergeRows(baseTables.milestones, focusedTables.milestones ?? null),
+      workItems: mergeRows(baseTables.workItems, focusedTables.workItems ?? null),
+      metrics: mergeRows(baseTables.metrics, focusedTables.metrics ?? null),
+      metricEntries: mergeRows(baseTables.metricEntries, focusedTables.metricEntries ?? null),
+      metricTargets: mergeRows(baseTables.metricTargets, focusedTables.metricTargets ?? null),
+      meetings: mergeRows(baseTables.meetings, focusedTables.meetings ?? null),
+      actionItems: mergeRows(baseTables.actionItems, focusedTables.actionItems ?? null),
+      meetingDecisions: mergeRows(baseTables.meetingDecisions, focusedTables.meetingDecisions ?? null),
+      reviewEntries: mergeRows(baseTables.reviewEntries, focusedTables.reviewEntries ?? null),
     };
 
-    const systemPrompt = `You are an AI strategic advisor for a Security Operations leader using "Ops Command."
-You have access to the user's operational data below.
-Use concrete references from the data whenever possible.
+    const sections = [
+      `You are an AI strategic advisor for a Security Operations leader using "Ops Command."
+Use only the provided operational context.
 Prioritize recommendations that are specific, executable, and risk-aware.
 Respond in concise markdown.
-Do not expose or infer hidden credentials. Passwords, API keys, and secret-like fields are intentionally excluded.
+If context is insufficient, say so and ask for only the minimum extra data needed.`,
+      buildInvocationSection(context),
+      buildFocusedContextSection(context, tables),
+      buildSection("PROFILES", tables.profiles),
+      buildSection("PEOPLE", tables.people),
+      buildSection("PROGRAMS", tables.programs),
+      buildSection("WORKSTREAMS", tables.workstreams),
+      buildSection("PROJECTS", tables.projects),
+      buildSection("MILESTONES", tables.milestones),
+      buildSection("WORK ITEMS", tables.workItems),
+      buildSection("METRICS", tables.metrics),
+      buildSection("METRIC ENTRIES", tables.metricEntries),
+      buildSection("METRIC TARGETS", tables.metricTargets),
+      buildSection("MEETINGS", tables.meetings),
+      buildSection("MEETING ACTION ITEMS", tables.actionItems),
+      buildSection("MEETING DECISIONS", tables.meetingDecisions),
+      buildSection("REVIEW ENTRIES", tables.reviewEntries),
+    ];
 
-${buildInvocationSection(context)}
+    const systemPrompt = buildPromptWithinBudget(sections, MAX_PROMPT_CHARS);
+    const userMessagesText = messages.map((m) => m.content).join("\n");
+    const estimatedTokens = estimateTokens(`${systemPrompt}\n${userMessagesText}`) + ESTIMATED_COMPLETION_TOKENS;
 
-${buildFocusedContextSection(context, tables)}
+    const { data: withinDailyQuota } = await serviceClient.rpc("check_daily_token_quota", {
+      p_user_id: userId,
+      p_function_name: "ops-advisor",
+      p_max_tokens: DAILY_TOKEN_LIMIT,
+      p_requested_tokens: estimatedTokens,
+    });
 
-${buildSection("PROFILES", profiles)}
-
-${buildSection("PEOPLE", people)}
-
-${buildSection("PROGRAMS", programs)}
-
-${buildSection("WORKSTREAMS", workstreams)}
-
-${buildSection("PROJECTS", projects)}
-
-${buildSection("MILESTONES", milestones)}
-
-${buildSection("WORK ITEMS", workItems)}
-
-${buildSection("METRICS", metrics)}
-
-${buildSection("METRIC ENTRIES", metricEntries)}
-
-${buildSection("METRIC TARGETS", metricTargets)}
-
-${buildSection("MEETINGS", meetings)}
-
-${buildSection("MEETING ACTION ITEMS", actionItems)}
-
-${buildSection("MEETING DECISIONS", meetingDecisions)}
-
-${buildSection("REVIEW ENTRIES", reviewEntries)}`;
+    if (withinDailyQuota === false) {
+      return new Response(
+        JSON.stringify({ error: "Daily token quota exceeded. Please try again tomorrow." }),
+        {
+          status: 429,
+          headers: getResponseHeaders(req, "application/json"),
+        },
+      );
+    }
 
     const ai = await generateGeminiText({
       systemPrompt,
@@ -415,7 +587,7 @@ ${buildSection("REVIEW ENTRIES", reviewEntries)}`;
     });
 
     return new Response(stream, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+      headers: getResponseHeaders(req, "text/event-stream"),
     });
   } catch (e) {
     if (e instanceof GeminiError) {
@@ -425,14 +597,14 @@ ${buildSection("REVIEW ENTRIES", reviewEntries)}`;
         : "AI service error";
       return new Response(JSON.stringify({ error: message }), {
         status,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: getResponseHeaders(req, "application/json"),
       });
     }
 
     console.error("ops-advisor error:", e);
     return new Response(JSON.stringify({ error: "Internal error" }), {
       status: 500,
-      headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
+      headers: getResponseHeaders(req, "application/json"),
     });
   }
 });

@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Shield, LogOut, FolderKanban, TrendingUp, Briefcase, Trash2, Layers, MessageSquare, CalendarDays, Zap, CircleHelp, BookOpenText } from 'lucide-react';
+import { LayoutDashboard, Users, Shield, LogOut, FolderKanban, TrendingUp, Briefcase, Trash2, Layers, MessageSquare, CalendarDays, Zap, CircleHelp, BookOpenText, StickyNote } from 'lucide-react';
 import { useStore } from '@/lib/store';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/utils';
@@ -30,6 +30,7 @@ function getAdvisorContextFromPath(pathname: string): AdvisorInvocationContext {
   if (pathname === '/calendar') return { sourcePath: pathname, sourceScreen: 'Calendar' };
   if (pathname === '/trash') return { sourcePath: pathname, sourceScreen: 'Trash' };
   if (pathname === '/tokens') return { sourcePath: pathname, sourceScreen: 'Token Usage' };
+  if (pathname === '/notes') return { sourcePath: pathname, sourceScreen: 'Notes' };
   if (pathname === '/advisor') return { sourcePath: pathname, sourceScreen: 'Advisor' };
   if (pathname === '/help-content') return { sourcePath: pathname, sourceScreen: 'Help Content' };
 
@@ -249,6 +250,16 @@ export function Layout() {
           >
             <MessageSquare size={16} />
             Advisor
+          </NavLink>
+          <NavLink
+            to="/notes"
+            className={({ isActive }) => cn(
+              'flex items-center gap-3 px-3 py-2.5 rounded text-sm font-medium transition-colors',
+              isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-accent',
+            )}
+          >
+            <StickyNote size={16} />
+            Notes
           </NavLink>
           <NavLink
             to="/trash"

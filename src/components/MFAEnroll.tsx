@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
-import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Loader2, ShieldCheck } from 'lucide-react';
 
 interface MFAEnrollProps {
   onEnrolled: () => void;
@@ -107,44 +107,6 @@ export function MFAEnroll({ onEnrolled, onCancelled }: MFAEnrollProps) {
           </Button>
         </div>
       </form>
-    </div>
-  );
-}
-
-interface MFAUnenrollProps {
-  onUnenrolled: () => void;
-}
-
-export function MFAUnenroll({ onUnenrolled }: MFAUnenrollProps) {
-  const [loading, setLoading] = useState(false);
-
-  const handleUnenroll = async () => {
-    setLoading(true);
-    try {
-      const { data } = await supabase.auth.mfa.listFactors();
-      const totp = data?.totp?.[0];
-      if (totp) {
-        const { error } = await supabase.auth.mfa.unenroll({ factorId: totp.id });
-        if (error) throw error;
-      }
-      toast({ title: 'MFA disabled', description: 'Two-factor authentication has been removed.' });
-      onUnenrolled();
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="flex items-center justify-between p-3 border border-border rounded-lg">
-      <div className="flex items-center gap-2">
-        <ShieldCheck size={14} className="text-primary" />
-        <span className="text-xs font-mono">MFA ENABLED</span>
-      </div>
-      <Button variant="destructive" size="sm" onClick={handleUnenroll} disabled={loading} className="font-mono text-[10px]">
-        {loading ? 'REMOVING...' : 'DISABLE MFA'}
-      </Button>
     </div>
   );
 }

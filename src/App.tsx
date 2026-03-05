@@ -8,6 +8,7 @@ import { StoreProvider } from "@/lib/store";
 import { ProgramStoreProvider } from "@/lib/program-store";
 import { MetricStoreProvider } from "@/lib/metric-store";
 import { RhythmStoreProvider } from "@/lib/rhythm-store";
+import { NotesStoreProvider } from "@/lib/notes-store";
 import { Layout } from "@/components/Layout";
 import CommandBoard from "@/pages/CommandBoard";
 import PeopleView from "@/pages/PeopleView";
@@ -26,6 +27,7 @@ import AdvisorChat from "@/pages/AdvisorChat";
 import TokenUsage from "@/pages/TokenUsage";
 import CalendarView from "@/pages/CalendarView";
 import HelpContentManager from "@/pages/HelpContentManager";
+import NotesView from "@/pages/NotesView";
 import NotFound from "@/pages/NotFound";
 import { MFAChallenge } from "@/components/MFAChallenge";
 import { MFAEnrollGate } from "@/components/MFAEnrollGate";
@@ -96,26 +98,29 @@ function ProtectedRoutes() {
       <ProgramStoreProvider>
         <MetricStoreProvider>
           <RhythmStoreProvider>
-            <Routes>
-              <Route element={<Layout />}>
-                <Route path="/" element={<CommandBoard />} />
-                <Route path="/projects" element={<ProjectsView />} />
-                <Route path="/programs" element={<ProgramsList />} />
-                <Route path="/workstreams" element={<WorkstreamsView />} />
-                <Route path="/program/:id" element={<ProgramDetail />} />
-                <Route path="/metrics" element={<MetricsView />} />
-                <Route path="/metric/:id" element={<MetricDetail />} />
-                <Route path="/people" element={<PeopleView />} />
-                <Route path="/person/:id" element={<PersonDetail />} />
-                <Route path="/project/:id" element={<ProjectDetail />} />
-                <Route path="/advisor" element={<AdvisorChat />} />
-                <Route path="/calendar" element={<CalendarView />} />
-                <Route path="/trash" element={<TrashView />} />
-                <Route path="/tokens" element={<TokenUsage />} />
-                <Route path="/help-content" element={<HelpContentManager />} />
-              </Route>
-              <Route path="*" element={<NotFound />} />
-            </Routes>
+            <NotesStoreProvider>
+              <Routes>
+                <Route element={<Layout />}>
+                  <Route path="/" element={<CommandBoard />} />
+                  <Route path="/projects" element={<ProjectsView />} />
+                  <Route path="/programs" element={<ProgramsList />} />
+                  <Route path="/workstreams" element={<WorkstreamsView />} />
+                  <Route path="/program/:id" element={<ProgramDetail />} />
+                  <Route path="/metrics" element={<MetricsView />} />
+                  <Route path="/metric/:id" element={<MetricDetail />} />
+                  <Route path="/people" element={<PeopleView />} />
+                  <Route path="/person/:id" element={<PersonDetail />} />
+                  <Route path="/project/:id" element={<ProjectDetail />} />
+                  <Route path="/notes" element={<NotesView />} />
+                  <Route path="/advisor" element={<AdvisorChat />} />
+                  <Route path="/calendar" element={<CalendarView />} />
+                  <Route path="/trash" element={<TrashView />} />
+                  <Route path="/tokens" element={<TokenUsage />} />
+                  <Route path="/help-content" element={<HelpContentManager />} />
+                </Route>
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </NotesStoreProvider>
           </RhythmStoreProvider>
         </MetricStoreProvider>
       </ProgramStoreProvider>

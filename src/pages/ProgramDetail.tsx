@@ -14,6 +14,7 @@ import { toast } from '@/hooks/use-toast';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
+import { NotesPanel } from '@/components/NotesPanel';
 
 const STATUS_BADGE: Record<string, string> = {
   active: 'bg-success/20 text-success',
@@ -87,6 +88,10 @@ export default function ProgramDetail() {
         {workstreams.length === 0 && (
           <p className="text-sm text-muted-foreground text-center py-4">No workstreams yet. Add one to start organizing.</p>
         )}
+      </div>
+
+      <div className="mt-6">
+        <NotesPanel targetType="program" targetId={program.id} />
       </div>
 
       <ProgramForm open={showEdit} onClose={() => setShowEdit(false)} program={program} />

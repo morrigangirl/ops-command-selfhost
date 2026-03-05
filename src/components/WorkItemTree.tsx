@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { ChevronRight, Plus, Trash2 } from 'lucide-react';
+import { ChevronRight, Plus, StickyNote, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { NotesPanel } from '@/components/NotesPanel';
 
 const TYPE_LABELS: Record<WorkItem['type'], string> = { epic: 'EPIC', task: 'TASK', subtask: 'SUBTASK' };
 const CHILD_TYPE: Record<WorkItem['type'], WorkItem['type'] | null> = { epic: 'task', task: 'subtask', subtask: null };
@@ -34,6 +35,7 @@ function WorkItemNode({ item, depth, projectId }: WorkItemNodeProps) {
   const [newTitle, setNewTitle] = useState('');
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(item.title);
+  const [showNotes, setShowNotes] = useState(false);
 
   const handleAdd = async () => {
     if (!newTitle.trim() || !childType) return;
@@ -106,6 +108,13 @@ function WorkItemNode({ item, depth, projectId }: WorkItemNodeProps) {
             className="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-destructive transition-opacity">
             <Trash2 size={12} />
           </button>
+          <button
+            onClick={() => setShowNotes((prev) => !prev)}
+            className="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-foreground transition-opacity"
+            title="Work item notes"
+          >
+            <StickyNote size={12} />
+          </button>
         </div>
 
         <CollapsibleContent>
@@ -118,6 +127,11 @@ function WorkItemNode({ item, depth, projectId }: WorkItemNodeProps) {
                 placeholder={`New ${childType}...`} className="h-6 text-xs flex-1"
                 onKeyDown={e => e.key === 'Enter' && handleAdd()} autoFocus />
               <Button size="sm" variant="ghost" onClick={handleAdd} className="h-6 px-2 text-xs">Add</Button>
+            </div>
+          )}
+          {showNotes && (
+            <div className="pt-2" style={{ paddingLeft: 16 }}>
+              <NotesPanel targetType="work_item" targetId={item.id} title="Work Item Notes" />
             </div>
           )}
         </CollapsibleContent>

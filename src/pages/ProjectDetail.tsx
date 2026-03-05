@@ -13,6 +13,7 @@ import { toast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import ReactMarkdown from 'react-markdown';
 import { MilestoneSection } from '@/components/MilestoneSection';
+import { NotesPanel } from '@/components/NotesPanel';
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -223,6 +224,10 @@ export default function ProjectDetail() {
 
       {/* Milestones & Work Breakdown */}
       <MilestoneSection projectId={project.id} />
+
+      <div className="mt-6">
+        <NotesPanel targetType="project" targetId={project.id} />
+      </div>
 
       <ProjectForm open={showEdit} onClose={() => setShowEdit(false)} project={project} />
     </div>
